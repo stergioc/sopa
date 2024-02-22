@@ -1,7 +1,9 @@
 import logging
 
+import dask as da
 import geopandas as gpd
 import numpy as np
+import tqdm
 import spatialdata
 import xarray as xr
 from shapely.geometry import Polygon
@@ -10,6 +12,9 @@ from spatialdata.models import ShapesModel
 
 from .._constants import ROI
 from .._sdata import get_intrinsic_cs, get_key
+
+from sopa.segmentation import Patches2D
+from multiscale_spatial_image import MultiscaleSpatialImage
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +92,59 @@ def hsv_otsu(
     _save_tissue_segmentation(sdata, polygons, image_key, image)
     return True
 
+
+def hovernet_nuclei(
+        sdata: SpatialData, 
+        weights: str, 
+        image_key: str | None = None,
+        batch_size: int = 32,
+        num_workers: int = 1,
+        device: str = "cpu", 
+    ):
+
+    from sopa.segmentation.methods import hovernet_batch
+    from sopa.utils.wsi import _get_extraction_parameters, _numpy_patch
+
+    image_key = get_key(sdata, "images", image_key)
+    image = sdata.images[image_key]
+
+    assert isinstance(
+        image, MultiscaleSpatialImage
+    ), "Only `MultiscaleSpatialImage` images are supported"
+
+    tiff_metadata = image.attrs["metadata"]
+    coordinate_system = get_intrinsic_cs(sdata, image)
+
+    hovernet, type_dict = hovernet_batch(weights, device=device)
+
+    level, resize_factor, patch_width, success = _get_extraction_parameters(
+        tiff_metadata, 40, 256
+    )
+    if not success:
+        log.error(f"Error retrieving the mpp for {image_key}, skipping tile embedding.")
+        return False
+
+    # TODO: Check the overlap (256 is the input 164 is the output) - overlap 46 scaled to the scale0
+    border_scale0 = 46*patch_width/256
+    patches = Patches2D(sdata, image_key, patch_width, border_scale0) 
+    log.info(f"Segmenting nuclei for {len(patches)} at level {level}")
+
+    for i in tqdm.tqdm(range(0, len(patches), batch_size)):
+        patch_boxes = patches[i : i + batch_size]
+
+        get_batches = [
+            da.delayed(_numpy_patch)(image, box, level, resize_factor, coordinate_system)
+            for box in patch_boxes
+        ]
+        batch = np.stack(da.compute(*get_batches, num_workers=num_workers))
+        inst_map, cls_map = hovernet(np.stack(batch))
+        import ipdb; ipdb.set_trace()
+
+        calc_polygons = [da.delayed(get_polygons)(im, cm, type_dict) for im,cm in zip(inst_map, cls_map)]
+        polygons = da.compute(*calc_polygons, num_workers=num_workers)
+        polygons = get_polygons(inst_map[31,...], cls_map[31,...], type_dict)
+
+        import ipdb; ipdb.set_trace()
 
 def _save_tissue_segmentation(
     sdata: SpatialData, polygons: list[Polygon], image_key: str, image_scale: xr.DataArray
