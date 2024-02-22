@@ -3,6 +3,36 @@ from typing import Callable
 import numpy as np
 
 
+def hovernet_batch(model_weights: str, device: str = "cpu") -> Callable:
+
+    import torch
+
+    from .hovernet import load_hovernet, post_process_predictions
+
+    model, type_dict = load_hovernet(model_weights)
+    model.eval()
+    model.to(device)
+
+    def _(batch: np.ndarray):
+        """
+        predictions output format:
+                * tissue_types: Raw tissue type prediction. Shape: (B, num_tissue_classes)
+                * nuclei_binary_map: Raw binary cell segmentation predictions. Shape: (B, 2, H, W)
+                * hv_map: Binary HV Map predictions. Shape: (B, 2, H, W)
+                * nuclei_type_map: Raw binary nuclei type predictions. Shape: (B, num_nuclei_classes, H, W)
+                * [Optional, if retrieve tokens]: tokens
+                * [Optional, if regression loss]:
+                * regression_map: Regression map for binary prediction. Shape: (B, 2, H, W)
+        """
+        with torch.no_grad():
+            predictions = model(torch.tensor(batch).to(device))
+        inst_map, cls_map = post_process_predictions(predictions)
+        return inst_map, cls_map
+
+    return _, type_dict
+
+
+
 def cellpose_patch(
     diameter: float, channels: list[str], model_type: str = "cyto2", **cellpose_kwargs: int
 ) -> Callable:
