@@ -119,7 +119,14 @@ def get_polygons(inst_map, cls_map, type_dict):
 
 def post_process_predictions(preds):
     inst_map = batch_proc_np_hv(
-        np.stack((preds["np"][:, 1, ...], preds["hv"][:, 0, ...], preds["hv"][:, 1, ...]), axis=-1)
+        np.stack(
+            (
+                preds["np"][:, 1, ...], 
+                preds["hv"][:, 0, ...], 
+                preds["hv"][:, 1, ...]
+            ), 
+            axis=-1
+        )
     )
     cls_map = np.argmax(preds["tp"], axis=1)
     return inst_map, cls_map
