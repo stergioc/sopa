@@ -26,7 +26,7 @@ def hovernet_batch(model_weights: str, device: str = "cpu") -> Callable:
         """
         with torch.no_grad():
             predictions = model(torch.tensor(batch).to(device))
-        inst_map, cls_map = post_process_predictions(predictions.detach().cpu())
+        inst_map, cls_map = post_process_predictions(predictions)
         return inst_map, cls_map
 
     return _, type_dict

@@ -121,14 +121,14 @@ def post_process_predictions(preds):
     inst_map = batch_proc_np_hv(
         np.stack(
             (
-                preds["np"][:, 1, ...], 
-                preds["hv"][:, 0, ...], 
-                preds["hv"][:, 1, ...]
+                preds["np"][:, 1, ...].detach().cpu(), 
+                preds["hv"][:, 0, ...].detach().cpu(), 
+                preds["hv"][:, 1, ...].detach().cpu()
             ), 
             axis=-1
         )
     )
-    cls_map = np.argmax(preds["tp"], axis=1)
+    cls_map = np.argmax(preds["tp"].detach().cpu(), axis=1)
     return inst_map, cls_map
 
 
