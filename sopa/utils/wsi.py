@@ -36,7 +36,7 @@ def _get_extraction_parameters(
         return None, None, None, False
 
     level = _get_best_level_for_downsample(tiff_metadata["level_downsamples"], downsample)
-    resize_factor = tiff_metadata["level_downsamples"][level] / downsample
+    resize_factor = int(tiff_metadata["level_downsamples"][level]) / downsample
     patch_width = int(patch_width * downsample)
 
     return level, resize_factor, patch_width, True

@@ -6,8 +6,19 @@ import torch
 import torch.nn.functional as F
 from matplotlib import cm
 
+def remove_small_objects(cc, min_size=64):
+    out = cc
 
-def proc_np_hv(pred):
+    if min_size == 0:  # shortcut for efficiency
+        return out
+    
+    component_sizes = np.bincount(cc.ravel())
+    too_small = component_sizes < min_size
+    too_small_mask = too_small[cc]
+    out[too_small_mask] = 0
+    return out
+
+def batch_proc_np_hv(pred):
     """Process Nuclei Prediction with XY Coordinate Map.
 
     Args:
@@ -22,17 +33,17 @@ def proc_np_hv(pred):
     from scipy.ndimage.morphology import binary_fill_holes
     from skimage.segmentation import watershed
     
-    pred = np.array(pred, dtype=np.float32)
+    pred = np.array(pred, dtype=np.float32).transpose(3,1,2,0)
 
-    blb_raw = pred[..., 0]
-    h_dir_raw = pred[..., 1]
-    v_dir_raw = pred[..., 2]
+    blb_raw = pred[0]
+    h_dir_raw = pred[1]
+    v_dir_raw = pred[2]
 
     # processing
     blb = np.array(blb_raw >= 0.5, dtype=np.int32)
 
     blb = measurements.label(blb)[0]
-    # blb = remove_small_objects(blb, min_size=10)
+    blb = remove_small_objects(blb, min_size=10)
     blb[blb > 0] = 1  # background is 0 already
 
     h_dir = cv2.normalize(
@@ -76,7 +87,7 @@ def proc_np_hv(pred):
 
     proced_pred = watershed(dist, markers=marker, mask=blb)
 
-    return proced_pred
+    return proced_pred.transpose(2,0,1)
 
 
 def get_polygons(inst_map, cls_map, type_dict):
@@ -86,29 +97,28 @@ def get_polygons(inst_map, cls_map, type_dict):
     inst_list = list(np.unique(inst_map))  # get list of instances
     inst_list.remove(0)  # remove background
 
-    import ipdb; ipdb.set_trace()
-
     contours = []
+    types = []
     for inst_idx, inst_id in enumerate(inst_list):
         inst_map_mask = np.array(inst_map == inst_id, np.uint8)  # get single object
         cc = cv2.findContours(
             inst_map_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
         )[0][0]
-        c_closed = np.array(list(cc) + [cc[0]])
-        contours.extend([c_closed.squeeze()])
+        if len(cc)>3:
+            c_closed = np.array(list(cc) + [cc[0]])
+            contours.extend([c_closed.squeeze()])
 
         if cls_map is not None:
-            type_id = np.unique(cls_map).max()  # non-zero
-            #inst_colour = type_colour[type_id].tolist()
+            type_id = cls_map[np.array(inst_map_mask,dtype=np.bool)].max()  # non-zero
+            types.append(type_dict[int(type_id)]) 
 
-    
-    polygons = [Polygon(contour) for contour in contours]
+    out = [(Polygon(contour), type) for contour,type in zip(contours,types) if type != 'Background']
 
-    return polygons
+    return out
 
 
 def post_process_predictions(preds):
-    inst_map = proc_np_hv(
+    inst_map = batch_proc_np_hv(
         np.stack((preds["np"][:, 1, ...], preds["hv"][:, 0, ...], preds["hv"][:, 1, ...]), axis=-1)
     )
     cls_map = np.argmax(preds["tp"], axis=1)

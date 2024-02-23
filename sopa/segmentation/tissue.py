@@ -1,15 +1,20 @@
 import logging
 
+import dask as da
 import geopandas as gpd
 import numpy as np
+import tqdm
 import spatialdata
 import xarray as xr
 from shapely.geometry import Polygon
 from spatialdata import SpatialData
 from spatialdata.models import ShapesModel
 
-from .._constants import ROI
+from .._constants import ROI, WsiKeys
 from .._sdata import get_intrinsic_cs, get_key
+
+from sopa.segmentation import Patches2D
+from multiscale_spatial_image import MultiscaleSpatialImage
 
 log = logging.getLogger(__name__)
 
@@ -84,16 +89,99 @@ def hsv_otsu(
         )
         return False
 
-    _save_tissue_segmentation(sdata, polygons, image_key, image)
+    _save_tissue_segmentation(sdata, polygons, image_key, image, ROI.KEY)
     return True
 
 
+def hovernet_nuclei(
+        sdata: SpatialData, 
+        weights: str, 
+        image_key: str | None = None,
+        batch_size: int = 32,
+        num_workers: int = 1,
+        device: str = "cpu", 
+    ):
+
+    from shapely.affinity import translate, scale
+
+    from sopa.segmentation.methods import hovernet_batch
+    from sopa.utils.wsi import _get_extraction_parameters, _numpy_patch
+    from sopa.segmentation.hovernet.utils import get_polygons
+
+    image_key = get_key(sdata, "images", image_key)
+    image = sdata.images[image_key]
+
+    assert isinstance(
+        image, MultiscaleSpatialImage
+    ), "Only `MultiscaleSpatialImage` images are supported"
+
+    tiff_metadata = image.attrs["metadata"]
+    coordinate_system = get_intrinsic_cs(sdata, image)
+
+    hovernet, type_dict = hovernet_batch(weights, device=device)
+
+    level, resize_factor, patch_width, success = _get_extraction_parameters(
+        tiff_metadata, 40, 256
+    )
+    if not success:
+        log.error(f"Error retrieving the mpp for {image_key}, skipping tile embedding.")
+        return False
+
+    border_scale0 = 46*patch_width/256
+    patches = Patches2D(sdata, image_key, patch_width, 2*border_scale0) 
+    log.info(f"Segmenting nuclei for {len(patches)} at level {level}")
+
+    polygons = []
+    classes = []
+    
+    for i in tqdm.tqdm(range(0, len(patches), batch_size)):
+        patch_boxes = patches[i : i + batch_size]
+
+        # gather batch
+        get_batches = [
+            da.delayed(_numpy_patch)(image, box, level, resize_factor, coordinate_system)
+            for box in patch_boxes
+        ]
+        batch = np.stack(da.compute(*get_batches, num_workers=num_workers))
+
+        # run inference on batch
+        inst_map, cls_map = hovernet(np.stack(batch))
+
+        # gather polygons
+        calc_polygons = [da.delayed(get_polygons)(im, cm, type_dict) for im,cm in zip(inst_map, cls_map)]
+        batch_polygons = da.compute(*calc_polygons, num_workers=num_workers)
+
+        for patch_polygons, box in zip(batch_polygons, patch_boxes):
+            for polygon, cls in patch_polygons:
+                polygons.append(
+                    scale(
+                        translate(
+                            polygon, 
+                            xoff=box[0]+border_scale0, 
+                            yoff=box[1]+border_scale0
+                        ),
+                        xfact = 1/resize_factor,
+                        yfact = 1/resize_factor
+                    )
+                )
+                classes.append(cls)
+
+    if len(polygons) > 0:
+        _save_tissue_segmentation(
+            sdata, 
+            polygons, 
+            image_key, 
+            image['scale0']['image'], 
+            WsiKeys.NUCLEI_KEY
+        )
+    # TODO: Check how to store the class together with the shapes. attrs?
+
 def _save_tissue_segmentation(
-    sdata: SpatialData, polygons: list[Polygon], image_key: str, image_scale: xr.DataArray
+    sdata: SpatialData, polygons: list[Polygon], image_key: str, image_scale: xr.DataArray, key: str
 ):
     assert (
-        ROI.KEY not in sdata.shapes
-    ), f"sdata['{ROI.KEY}'] was already existing, but tissue segmentation is run on top. Delete the shape(s) first."
+        key not in sdata.shapes
+    ), f"sdata['{key}'] was already existing, but tissue segmentation is run on top. Delete the shape(s) first."
 
     geo_df = gpd.GeoDataFrame(geometry=polygons)
     geo_df = ShapesModel.parse(
@@ -106,6 +194,6 @@ def _save_tissue_segmentation(
         geo_df, image_scale.attrs["transform"][image_cs], maintain_positioning=True
     )
 
-    sdata.add_shapes(ROI.KEY, geo_df)
+    sdata.add_shapes(key, geo_df)
 
-    log.info(f"Tissue segmentation saved in sdata['{ROI.KEY}']")
+    log.info(f"Tissue segmentation saved in sdata['{key}']")

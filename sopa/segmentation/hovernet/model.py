@@ -17,6 +17,7 @@ def load_hovernet(weights: str) -> Net:
     }
     type_dicts = {
         "pannuke": {
+            0: "Background",
             1: "Neoplastic",
             2: "Inflammatory",
             3: "Connective",

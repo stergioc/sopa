@@ -30,6 +30,8 @@ VALID_DIMENSIONS = ("c", "y", "x")
 LOW_AVERAGE_COUNT = 0.01
 EPS = 1e-5
 
+class WsiKeys:
+    NUCLEI_KEY = "nuclei"
 
 class ROI:
     KEY = "region_of_interest"
