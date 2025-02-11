@@ -226,3 +226,37 @@ def report(
     sdata = read_zarr_standardized(sdata_path)
 
     write_report(path, sdata, table_key=table_key)
+
+
+@app.command()
+def compute_emb(
+    wsi_path: str = typer.Argument(help="Path to a WSI file"),
+    path: str = typer.Argument(help="Path to the extracted features"),
+    model: str = typer.Argument(help="Name to the model to use, one of resnet50, dinov2, hoptimus0"),
+    patch_size: int = typer.Argument(help="Size of the patches extracted from the WSI"),
+    patch_overlap: int = typer.Argument(help="Overlap between the patches"),
+    magnification: int = typer.Argument(help="Magnification of the WSI"),
+    batch_size: int = typer.Argument(help="Batch size to use for the model"),
+    device: str = typer.Option("cpu", help="Device to use for the model"),
+    backend: str = typer.Option("tiffslide", help="Backend used for WSI loading, one of tiffslide, openslide"),
+):
+    """Create a HTML report of the pipeline run and some quality controls"""
+    import sopa
+
+    slide = sopa.io.wsi(wsi_path, backend=backend)
+    image_key = next(iter(slide.images.keys()))
+    sopa.segmentation.tissue(slide, image_key)
+    sopa.patches.compute_embeddings(
+        slide,
+        model,
+        patch_size,
+        patch_overlap=patch_overlap,
+        magnification=magnification,
+        image_key=image_key,
+        batch_size=batch_size,
+        device=device,
+    )
+
+    slide.attrs['wsi_path'] = wsi_path
+    del slide[image_key]
+    slide.write(path)
