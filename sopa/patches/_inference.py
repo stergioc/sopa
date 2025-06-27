@@ -84,7 +84,7 @@ class Inference:
 
         delayed_patches = [dask.delayed(self._numpy_patch)(box) for box in bboxes]
         batch = np.array(dask.compute(*delayed_patches))
-        batch = torch.tensor(batch, dtype=torch.float32) / 255.0
+        batch = torch.tensor(batch, dtype=torch.float32)
 
         return batch if self.resize_factor == 1 else self._torch_resize(batch)
 
