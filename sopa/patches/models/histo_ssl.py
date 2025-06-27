@@ -9,5 +9,7 @@ class HistoSSLFeatures(torch.nn.Module):
         self.model = torch.hub.load_state_dict_from_url(url)
         self.model.fc = torch.nn.Sequential()
 
+        self.t = transforms.Compose([transforms.ToTensor()])
+
     def forward(self, x):
-        return self.model(x)
+        return self.model(self.t(x))
